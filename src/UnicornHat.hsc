@@ -1,31 +1,48 @@
-module UnicornHat where
+module UnicornHat
+  ( UnicornHat
+  , withHat
+  , draw
+  , changeBrightness
+  )
+  where
 
 import Foreign
 import Foreign.Storable
 import Control.Exception
 import Ws2811
 
-unicornHatDma = 5
-unicornHatGpio = 18
-unicornHatLeds = 64
+newtype UnicornHat = UnicornHat (Ptr Ws2811)
 
-withHat :: (Ptr Ws2811 -> IO ()) -> IO ()
+initialUnicornHat :: Ws2811
+initialUnicornHat = defaultWs2811
+  { dmaNum = 5
+  , channel0 = defaultChannel
+      { gpioNum    = 18
+      , count      = 64
+      , brightness = 255
+      }
+  }
+
+withHat :: (UnicornHat -> IO ()) -> IO ()
 withHat k =
-  allocaBytes ws2811_size $ \ptr ->
-    do setFreq ptr targetFreq
-       setDmaNum ptr unicornHatDma
+  with initialUnicornHat $ \ptr ->
+  bracket_ (ws2811_init ptr) (ws2811_fini ptr) $
+  k (UnicornHat ptr)
 
-       let chan0 = channelPtr ptr 0
-       setGpioNum    chan0 unicornHatGpio
-       setCount      chan0 unicornHatLeds
-       setBrightness chan0 255
-       setInvert     chan0 0
+draw :: UnicornHat -> [[Ws2811Led]] -> IO ()
+draw (UnicornHat hat) pic =
+  do let chan0 = channelPtr hat 0
+     leds <- getLeds chan0
+     pokeArray leds (take 64 (flatten pic))
+     _ <- ws2811_render hat
+     return ()
 
-       let chan1 = channelPtr ptr 1
-       setGpioNum    chan1 0
-       setCount      chan1 0
-       setBrightness chan1 0
-       setInvert     chan1 0
+changeBrightness :: UnicornHat -> Int -> IO ()
+changeBrightness (UnicornHat hat) x
+  | 0 <= x && x <= 255 = setBrightness (channelPtr hat 0) (fromIntegral x)
+  | otherwise          = fail "UnicornHat.changeBrightness: invalid argument"
 
-       bracket_ (ws2811_init ptr) (ws2811_fini ptr) (k ptr)
-
+flatten :: [[a]] -> [a]
+flatten [] = []
+flatten (x:y:z) = x ++ reverse y ++ flatten z
+flatten [x] = x
